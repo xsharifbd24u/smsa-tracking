@@ -1,0 +1,34 @@
+name: SMSA Tracking
+
+on:
+  workflow_dispatch:  # ম্যানুয়ালি রান করার জন্য
+  schedule:
+    - cron: '0 6 * * *'  # প্রতিদিন সকাল ৬টায় (UTC) অটো রান
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install pandas openpyxl playwright
+        playwright install chromium
+    
+    - name: Run tracking script
+      run: python smsa_track.py
+    
+    - name: Upload results
+      uses: actions/upload-artifact@v4
+      with:
+        name: smsa-tracking-results
+        path: SMSA_Tracking_Results.xlsx
+        retention-days: 30
