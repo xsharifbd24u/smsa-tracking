@@ -60,6 +60,7 @@ async def batch_track():
                         idx = page_text.find(track_id)
                         block = page_text[idx:idx + 1200]
                         
+                        # ---- Find Status ----
                         status = "In Transit"
                         status_match = re.search(r"Status\s*\n\s*([^\n]+(?:Delivered|Out for Delivery|In Transit|Shipment Received)[^\n]*)", block, re.IGNORECASE)
                         if status_match:
@@ -79,6 +80,17 @@ async def batch_track():
                                 if status_match2:
                                     status = status_match2.group(1).strip()
                         
+                        # ---- Determine Status Category ----
+                        if "Delivered" in status or "delivered" in status:
+                            status_category = "Delivered"
+                        elif "Out for Delivery" in status or "Shipment Received" in status or "In Transit" in status or "Departed" in status or "Arrived" in status:
+                            status_category = "In Transit"
+                        elif "Picked Up" in status or "Picked up" in status:
+                            status_category = "Picked Up"
+                        else:
+                            status_category = "In Transit"
+                        
+                        # ---- Find From ----
                         origin = "N/A"
                         from_match = re.search(r"From\s*\n\s*([^\n]+)", block, re.IGNORECASE)
                         if from_match:
@@ -87,6 +99,7 @@ async def batch_track():
                             if "mé & Príncipe" in origin or "Sao Tome" in origin:
                                 origin = "N/A"
                         
+                        # ---- Find To ----
                         destination = "N/A"
                         to_match = re.search(r"To\s*\n\s*([^\n]+)", block, re.IGNORECASE)
                         if to_match:
@@ -109,6 +122,7 @@ async def batch_track():
                                 if "mé & Príncipe" in destination:
                                     destination = "N/A"
                         
+                        # ---- Find Last Update ----
                         last_update = "N/A"
                         date_match = re.search(r"(\d{2}-[A-Za-z]{3}-\d{4})\s*\n\s*([A-Za-z]+)?", block, re.IGNORECASE)
                         if date_match:
@@ -120,12 +134,20 @@ async def batch_track():
                         if time_match and last_update != "N/A":
                             last_update += f" {time_match.group(1).strip()}"
                         
+                        # ---- Check if shipment has moved from pickup (has updates) ----
+                        # If there's any tracking progress beyond pickup, it's updated
+                        has_updates = False
+                        if "Out for Delivery" in block or "Shipment Received" in block or "Departed" in block or "Arrived" in block or "Delivered" in block:
+                            has_updates = True
+                        
                         all_results.append({
                             "Tracking Number": track_id,
                             "Status": status,
+                            "Status Category": status_category,
                             "From": origin,
                             "To": destination,
                             "Last Update": last_update,
+                            "Has Updates": has_updates,
                             "Check Result": "✅ Success"
                         })
                         print(f"      ✅ Status: {status[:50]}...")
@@ -135,9 +157,11 @@ async def batch_track():
                         all_results.append({
                             "Tracking Number": track_id,
                             "Status": "❌ Not Found",
+                            "Status Category": "Not Found",
                             "From": "N/A",
                             "To": "N/A",
                             "Last Update": "N/A",
+                            "Has Updates": False,
                             "Check Result": "❌ Failed"
                         })
                         print(f"      ❌ Not Found")
@@ -148,9 +172,11 @@ async def batch_track():
                     all_results.append({
                         "Tracking Number": track_id,
                         "Status": "⚠️ Error",
+                        "Status Category": "Error",
                         "From": "N/A",
                         "To": "N/A",
                         "Last Update": "N/A",
+                        "Has Updates": False,
                         "Check Result": "❌ Failed"
                     })
             
@@ -165,31 +191,50 @@ async def batch_track():
 
 def create_excel(results, start_time, end_time):
     try:
-        print("\n📊 Creating Excel file...")
+        print("\n📊 Creating Excel file with color coding...")
         result_df = pd.DataFrame(results)
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "SMSA Tracking Status"
         
-        ws.merge_cells('A1:F1')
+        # Title
+        ws.merge_cells('A1:H1')
         title_cell = ws['A1']
         title_cell.value = "📦 SMSA EXPRESS TRACKING REPORT"
         title_cell.font = Font(name="Calibri", size=16, bold=True, color="1F497D")
         title_cell.alignment = Alignment(horizontal="center", vertical="center")
         
-        ws.merge_cells('A2:F2')
+        # Info with color legend
+        ws.merge_cells('A2:H2')
         info_cell = ws['A2']
         info_cell.value = f"Generated: {start_time.strftime('%Y-%m-%d %H:%M:%S')} | Duration: {(end_time - start_time).total_seconds():.2f}s | Total Records: {len(results)}"
         info_cell.font = Font(name="Calibri", size=10, color="666666")
         info_cell.alignment = Alignment(horizontal="center", vertical="center")
         
-        ws.merge_cells('A3:F3')
+        # Color Legend (Row 3)
+        ws.merge_cells('A3:H3')
+        legend_cell = ws['A3']
+        legend_cell.value = "🟢 Delivered  |  🟡 In Transit / Out for Delivery / Updated  |  🔴 Picked Up Only (Not Moved)"
+        legend_cell.font = Font(name="Calibri", size=10, bold=True)
+        legend_cell.alignment = Alignment(horizontal="center", vertical="center")
         
-        headers = ["Tracking Number", "Status", "From", "To", "Last Update", "Check Result"]
+        # Headers
+        headers = ["Tracking Number", "Tracking Link", "Status", "Status Category", "From", "To", "Last Update", "Check Result"]
         for col_idx, header in enumerate(headers, 1):
             cell = ws.cell(row=4, column=col_idx)
             cell.value = header
         
+        # Color Definitions
+        green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # Light Green
+        green_font = Font(color="006100", bold=True)
+        
+        yellow_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")  # Light Yellow
+        yellow_font = Font(color="9C5700", bold=True)
+        
+        red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # Light Red
+        red_font = Font(color="9C0006", bold=True)
+        
+        # Styles
         header_fill = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
         header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
         row_alt_fill = PatternFill(start_color="F2F5F9", end_color="F2F5F9", fill_type="solid")
@@ -200,41 +245,109 @@ def create_excel(results, start_time, end_time):
             bottom=Side(style="thin", color="D9D9D9"),
         )
         
+        # Insert data with conditional coloring
         for row_idx, record in enumerate(results, start=5):
-            ws.cell(row=row_idx, column=1, value=record["Tracking Number"])
-            ws.cell(row=row_idx, column=2, value=record["Status"])
-            ws.cell(row=row_idx, column=3, value=record["From"])
-            ws.cell(row=row_idx, column=4, value=record["To"])
-            ws.cell(row=row_idx, column=5, value=record["Last Update"])
-            ws.cell(row=row_idx, column=6, value=record["Check Result"])
+            # Determine color based on status category
+            if record["Status Category"] == "Delivered":
+                row_fill = green_fill
+                row_font = green_font
+            elif record["Status Category"] == "In Transit" or record["Has Updates"] == True:
+                row_fill = yellow_fill
+                row_font = yellow_font
+            elif record["Status Category"] == "Picked Up":
+                row_fill = red_fill
+                row_font = red_font
+            else:
+                row_fill = None
+                row_font = None
+            
+            # Tracking Number
+            num_cell = ws.cell(row=row_idx, column=1, value=record["Tracking Number"])
+            if row_fill:
+                num_cell.fill = row_fill
+            if row_font:
+                num_cell.font = row_font
+            
+            # Tracking Link (Hyperlink)
+            link_url = f"https://www.smsaexpress.com/trackingdetails?tracknumbers[0]={record['Tracking Number']}"
+            link_cell = ws.cell(row=row_idx, column=2, value="🔗 View")
+            link_cell.hyperlink = link_url
+            link_cell.font = Font(color="0563C1", underline="single")
+            if row_fill:
+                link_cell.fill = row_fill
+            link_cell.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # Status
+            status_cell = ws.cell(row=row_idx, column=3, value=record["Status"])
+            if row_fill:
+                status_cell.fill = row_fill
+            if row_font:
+                status_cell.font = row_font
+            
+            # Status Category
+            cat_cell = ws.cell(row=row_idx, column=4, value=record["Status Category"])
+            if row_fill:
+                cat_cell.fill = row_fill
+            if row_font:
+                cat_cell.font = row_font
+            
+            # From
+            from_cell = ws.cell(row=row_idx, column=5, value=record["From"])
+            if row_fill:
+                from_cell.fill = row_fill
+            if row_font:
+                from_cell.font = row_font
+            
+            # To
+            to_cell = ws.cell(row=row_idx, column=6, value=record["To"])
+            if row_fill:
+                to_cell.fill = row_fill
+            if row_font:
+                to_cell.font = row_font
+            
+            # Last Update
+            update_cell = ws.cell(row=row_idx, column=7, value=record["Last Update"])
+            if row_fill:
+                update_cell.fill = row_fill
+            if row_font:
+                update_cell.font = row_font
+            
+            # Check Result
+            result_cell = ws.cell(row=row_idx, column=8, value=record["Check Result"])
+            if row_fill:
+                result_cell.fill = row_fill
+            if row_font:
+                result_cell.font = row_font
         
-        for col_idx in range(1, 7):
+        # Header styles
+        for col_idx in range(1, 9):
             cell = ws.cell(row=4, column=col_idx)
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
             cell.border = thin_border
         
+        # Data row styles (borders and alignment)
         for row_idx in range(5, ws.max_row + 1):
-            for col_idx in range(1, 7):
+            for col_idx in range(1, 9):
                 cell = ws.cell(row=row_idx, column=col_idx)
                 cell.border = thin_border
-                if col_idx in [1, 5, 6]:
+                if col_idx in [1, 2, 4, 7, 8]:
                     cell.alignment = Alignment(horizontal="center", vertical="center")
                 else:
                     cell.alignment = Alignment(horizontal="left", vertical="center")
-                if row_idx % 2 == 0:
-                    cell.fill = row_alt_fill
         
-        column_widths = {'A': 20, 'B': 45, 'C': 25, 'D': 25, 'E': 20, 'F': 15}
+        # Column widths
+        column_widths = {'A': 18, 'B': 15, 'C': 45, 'D': 20, 'E': 25, 'F': 25, 'G': 20, 'H': 15}
         for col_letter, width in column_widths.items():
             ws.column_dimensions[col_letter].width = width
         
+        # Footer
         footer_row = ws.max_row + 1
-        ws.merge_cells(f'A{footer_row}:F{footer_row}')
+        ws.merge_cells(f'A{footer_row}:H{footer_row}')
         footer_cell = ws[f'A{footer_row}']
-        footer_cell.value = f"Report generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | SMSA Express Tracking System"
-        footer_cell.font = Font(name="Calibri", size=9, color="999999")
+        footer_cell.value = f"🟢 Delivered | 🟡 In Transit/Updated | 🔴 Picked Up Only | Report: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        footer_cell.font = Font(name="Calibri", size=9, color="666666")
         footer_cell.alignment = Alignment(horizontal="center", vertical="center")
         
         wb.save(output_file)
@@ -242,10 +355,17 @@ def create_excel(results, start_time, end_time):
         print(f"📁 Location: {os.path.abspath(output_file)}")
         print(f"📊 Total {len(results)} records processed")
         
-        success_count = sum(1 for r in results if r["Check Result"] == "✅ Success")
-        print(f"\n📊 Summary:")
-        print(f"   ✅ Success: {success_count}")
-        print(f"   ❌ Failed: {len(results) - success_count}")
+        # Summary with color counts
+        delivered = sum(1 for r in results if r["Status Category"] == "Delivered")
+        in_transit = sum(1 for r in results if r["Status Category"] == "In Transit" or r.get("Has Updates", False))
+        picked_up = sum(1 for r in results if r["Status Category"] == "Picked Up")
+        failed = sum(1 for r in results if r["Check Result"] != "✅ Success")
+        
+        print(f"\n📊 Color Summary:")
+        print(f"   🟢 Delivered: {delivered}")
+        print(f"   🟡 In Transit/Updated: {in_transit}")
+        print(f"   🔴 Picked Up Only: {picked_up}")
+        print(f"   ❌ Failed: {failed}")
         print(f"   ⏱️ Time: {(end_time - start_time).total_seconds():.2f} seconds")
         
     except PermissionError:
